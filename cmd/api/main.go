@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/accmi/greenlight/internal/data"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 )
@@ -30,6 +31,7 @@ type appConfig struct {
 type application struct {
 	config appConfig
 	logger *log.Logger
+	models data.Models
 }
 
 func main() {
@@ -65,6 +67,7 @@ func main() {
 	app := &application{
 		config: config,
 		logger: logger,
+		models: data.NewModels(db),
 	}
 
 	server := &http.Server{

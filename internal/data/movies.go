@@ -1,9 +1,12 @@
 package data
 
 import (
+	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/accmi/greenlight/internal/validator"
+	"github.com/lib/pq"
 )
 
 type Movie struct {
@@ -16,6 +19,115 @@ type Movie struct {
 	Version   int32     `json:"version"`
 }
 
+type MovieModel struct {
+	DB *sql.DB
+}
+
+func (mm *MovieModel) Insert(movie *Movie) error {
+	query := `
+		INSERT INTO movies (title, year, runtime, genres)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, created_at, version
+	`
+
+	args := []any{movie.Title, movie.Year, movie.Runtime, pq.Array(movie.Genres)}
+
+	return mm.DB.QueryRow(query, args...).Scan(&movie.ID, &movie.CreatedAt, &movie.Version)
+}
+
+func (mm *MovieModel) Get(id int64) (*Movie, error) {
+	if id < 1 {
+		return nil, ErrRecordNotFound
+	}
+
+	query := `
+		SELECT id, created_at, title, year, runtime, genres, version
+		FROM movies
+		WHERE id = $1
+	`
+
+	var movie Movie
+
+	err := mm.DB.QueryRow(query, id).Scan(
+		&movie.ID,
+		&movie.CreatedAt,
+		&movie.Title,
+		&movie.Year,
+		&movie.Runtime,
+		pq.Array(&movie.Genres),
+		&movie.Version,
+	)
+
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return nil, ErrRecordNotFound
+		default:
+			return nil, err
+		}
+	}
+
+	return &movie, nil
+}
+
+func (mm *MovieModel) Update(movie *Movie) error {
+	query := `
+		UPDATE movies
+		SET title = $1, year = $2, runtime = $3, genres = $4, version = version + 1
+		WHERE id = $5 AND version = $6
+		RETURNING version
+	`
+
+	args := []any{
+		movie.Title,
+		movie.Year,
+		movie.Runtime,
+		pq.Array(movie.Genres),
+		movie.ID,
+		movie.Version,
+	}
+
+	err := mm.DB.QueryRow(query, args...).Scan(&movie.Version)
+	if err != nil {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return ErrEditConflict
+		default:
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (mm *MovieModel) Delete(id int64) error {
+	if id < 1 {
+		return ErrRecordNotFound
+	}
+
+	query := `
+		DELETE FROM movies
+		WHERE id = $1
+	`
+	result, err := mm.DB.Exec(query, id)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return ErrRecordNotFound
+	}
+
+	return nil
+}
+
+// Create & Update movie Validator
+// TODO: After moving to your own project add DTO layer for such things
 func ValidateMovie(v *validator.Validator, movie *Movie) {
 	v.Check(movie.Title != "", "title", "must be provided")
 	v.Check(len(movie.Title) <= 500, "title", "must not be more than 500 bytes long")
